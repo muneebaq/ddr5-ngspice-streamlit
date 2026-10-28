@@ -314,6 +314,11 @@ with st.expander("Optimization objective and constraints", expanded=True):
         max_energy_fj = st.slider("Maximum energy proxy (fJ)", 50, 500, 250, 25)
     with c3:
         max_delay_ns = st.slider("Maximum RC-delay proxy (ns)", 0.1, 3.0, 1.0, 0.1)
+    c4, c5 = st.columns(2)
+    with c4:
+        max_vdd = st.slider("Maximum supply VDD (V)", 0.90, 1.20, 1.10, 0.05)
+    with c5:
+        max_wordline_high = st.slider("Maximum wordline-high (V)", 1.20, 2.20, 1.80, 0.05)
     budget = st.slider("Candidate evaluations per algorithm", 24, 240, 96, 24)
     seed = st.number_input("Random seed (repeatable results)", min_value=0, max_value=100000, value=7)
     validate = st.checkbox("Validate the three finalists using ngspice", value=True)
@@ -323,6 +328,8 @@ limits = {
     "min_margin_mv": float(min_margin_mv),
     "max_energy_fj": float(max_energy_fj),
     "max_delay_ns": float(max_delay_ns),
+    "max_vdd": float(max_vdd),
+    "max_wordline_high": float(max_wordline_high),
 }
 opt_signature = (signature, objective, tuple(limits.values()), budget, int(seed), validate)
 
