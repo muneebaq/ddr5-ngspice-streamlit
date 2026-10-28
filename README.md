@@ -22,7 +22,7 @@ The **Automatic circuit optimization** section runs three bounded, reproducible 
 2. Coordinate search
 3. Differential evolution
 
-Choose a target: **Balanced**, **Maximum sensing margin**, **Low switching energy**, or **Fast read access**. You can set a minimum sensing margin, maximum switching-energy proxy, maximum RC-delay proxy, and candidate-evaluation budget. The optimizer searches seven design variables; the NMOS process parameters and timing scale remain fixed to your selected values.
+Choose a target: **Balanced**, **Maximum sensing margin**, **Low switching energy**, or **Fast read access**. You can set a minimum sensing margin, maximum switching-energy proxy, maximum RC-delay proxy, upper VDD and wordline-voltage limits, and candidate-evaluation budget. The optimizer searches seven design variables; the NMOS process parameters and timing scale remain fixed to your selected values. Default voltage limits are 1.1 V VDD and 1.8 V wordline-high; these are educational design constraints, not a foundry reliability guarantee.
 
 The algorithms initially rank candidates using a simplified analytical **surrogate**. With the validation checkbox on, the application executes ngspice on the three finalists and reports their *measured read margin*. It flags unverified or constraint-violating results. Use **Apply these values** to transfer the recommended design to the parameter controls, then run a full transient plot.
 
