@@ -61,6 +61,11 @@ def load_preset() -> None:
         st.session_state[name] = value
 
 
+def restore_baseline() -> None:
+    st.session_state["preset"] = "Baseline"
+    load_preset()
+
+
 def build_netlist(**p: float) -> str:
     """Parameterized 1T1C circuit with a Level-1 NMOS and ideal drivers."""
     supply = p["supply"]
@@ -193,10 +198,7 @@ st.selectbox(
     key="preset",
     on_change=load_preset,
 )
-if st.button("↺ Restore baseline values"):
-    st.session_state["preset"] = "Baseline"
-    load_preset()
-    st.rerun()
+st.button("↺ Restore baseline values", on_click=restore_baseline)
 
 with st.expander("1. Storage and bitline", expanded=True):
     left, right = st.columns(2)
