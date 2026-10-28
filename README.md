@@ -2,6 +2,18 @@
 
 A mobile-friendly Streamlit app that runs **real ngspice transient simulations** of a simplified 1T1C DRAM cell on the cloud server. The browser acts only as a client, so an Android phone or iPhone needs no ngspice installation.
 
+## Adjustable variables
+
+The phone-friendly parameter editor includes grouped controls for:
+
+| Group | Parameters |
+| --- | --- |
+| Storage and bitline | Cell capacitance, bitline capacitance, supply voltage, precharge voltage fraction |
+| Access transistor | NMOS width and length, threshold voltage, transconductance parameter KP |
+| Drivers and timing | Wordline-high voltage, driver on-resistance, timing scale factor |
+
+Use the **experiment presets** to quickly compare a weak cell, heavy bitline, weak transistor, low wordline drive, or slow peripheral drivers with the baseline. The ideal charge-sharing reference values and exported `.cir` file are regenerated from these settings. Previously plotted waveforms are identified as stale when controls are changed until you rerun ngspice.
+
 ## Files
 
 - `streamlit_app.py` — interface, parameterized SPICE netlist and simulation runner
