@@ -6,7 +6,6 @@ does not execute arbitrary user-supplied SPICE scripts on the cloud server.
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 import shutil
 import subprocess
@@ -32,47 +31,96 @@ st.markdown(
 )
 
 
-def build_netlist(cell_ff: int, bitline_ff: int, supply: float, width_um: float) -> str:
-    """A 180-nm educational MOS model with idealized peripheral switches."""
-    pre = supply / 2
+DEFAULTS = {
+    "cell_ff": 20,
+    "bitline_ff": 300,
+    "supply": 1.10,
+    "precharge_fraction": 0.50,
+    "width_um": 1.0,
+    "length_nm": 180,
+    "threshold": 0.45,
+    "kp_ua": 200,
+    "wordline_high": 1.80,
+    "driver_ron": 50,
+    "time_scale": 1.0,
+}
+
+PRESETS = {
+    "Baseline": DEFAULTS,
+    "Small storage capacitor": {**DEFAULTS, "cell_ff": 5},
+    "Heavy bitline loading": {**DEFAULTS, "bitline_ff": 1000},
+    "Weak access transistor": {**DEFAULTS, "width_um": 0.5, "length_nm": 500},
+    "Low wordline drive": {**DEFAULTS, "wordline_high": 1.30},
+    "Slow peripheral drivers": {**DEFAULTS, "driver_ron": 500},
+}
+
+
+def load_preset() -> None:
+    """Populate widget state before any sliders are instantiated."""
+    for name, value in PRESETS[st.session_state["preset"]].items():
+        st.session_state[name] = value
+
+
+def build_netlist(**p: float) -> str:
+    """Parameterized 1T1C circuit with a Level-1 NMOS and ideal drivers."""
+    supply = p["supply"]
+    pre = supply * p["precharge_fraction"]
+    scale = p["time_scale"]
+
+    def stamp(points: list[tuple[float, float]]) -> str:
+        """Render a PWL source with SPICE-safe continuation lines."""
+        fragments = [f"{time * scale:.3f}n {voltage:.4f}" for time, voltage in points]
+        rows = [" ".join(fragments[i : i + 6]) for i in range(0, len(fragments), 6)]
+        return "PWL(" + "\n+ ".join(rows) + ")"
+
+    wl = stamp([
+        (0, 0), (2, 0), (2.1, p["wordline_high"]), (6, p["wordline_high"]), (6.1, 0),
+        (16, 0), (16.1, p["wordline_high"]), (22, p["wordline_high"]), (22.1, 0),
+        (25, 0), (25.1, p["wordline_high"]), (29, p["wordline_high"]), (29.1, 0),
+        (40, 0), (40.1, p["wordline_high"]), (44, p["wordline_high"]), (44.1, 0), (50, 0),
+    ])
+    write1 = stamp([(0, 0), (1, 0), (1.1, 1), (6, 1), (6.1, 0), (50, 0)])
+    write0 = stamp([(0, 0), (24, 0), (24.1, 1), (29, 1), (29.1, 0), (50, 0)])
+    precharge = stamp([
+        (0, 0), (10, 0), (10.1, 1), (14, 1), (14.1, 0),
+        (34, 0), (34.1, 1), (38, 1), (38.1, 0), (50, 0),
+    ])
+    restore = stamp([(0, 0), (19, 0), (19.1, 1), (22, 1), (22.1, 0), (50, 0)])
+
     return f"""* DDR5 Research Lab - 1T1C DRAM transient testbench
 * Generated numeric parameters; ngspice simulation, not a foundry PDK
 .param VDD={supply:.5f}
 .param VPRE={pre:.5f}
-.model NACCESS NMOS (LEVEL=1 VTO=0.45 KP=200u GAMMA=0.4 PHI=0.7 LAMBDA=0.05)
-.model DRIVER SW (RON=50 ROFF=1e12 VT=0.5 VH=0.1)
+.model NACCESS NMOS (LEVEL=1 VTO={p['threshold']:.3f} KP={p['kp_ua']:.0f}u GAMMA=0.4 PHI=0.7 LAMBDA=0.05)
+.model DRIVER SW (RON={p['driver_ron']:.0f} ROFF=1e12 VT=0.5 VH=0.1)
 VHIGH high 0 DC {{VDD}}
 VLOW low 0 DC 0
 VPRE pre 0 DC {{VPRE}}
-M1 cell wl bl 0 NACCESS W={width_um:.2f}u L=180n
-CSTORAGE cell 0 {cell_ff}f
-CBITLINE bl 0 {bitline_ff}f
+M1 cell wl bl 0 NACCESS W={p['width_um']:.2f}u L={p['length_nm']:.0f}n
+CSTORAGE cell 0 {p['cell_ff']:.0f}f
+CBITLINE bl 0 {p['bitline_ff']:.0f}f
 RCELL cell 0 1e15
 RBIT bl 0 1e15
 SWRITE1 bl high cw1 0 DRIVER
 SWRITE0 bl low cw0 0 DRIVER
 SPRE bl pre cpre 0 DRIVER
 SREST bl high crest 0 DRIVER
-VWL wl 0 PWL(0n 0 2n 0 2.1n 1.8 6n 1.8 6.1n 0
-+ 16n 0 16.1n 1.8 22n 1.8 22.1n 0
-+ 25n 0 25.1n 1.8 29n 1.8 29.1n 0
-+ 40n 0 40.1n 1.8 44n 1.8 44.1n 0 50n 0)
-VCW1 cw1 0 PWL(0n 0 1n 0 1.1n 1 6n 1 6.1n 0 50n 0)
-VCW0 cw0 0 PWL(0n 0 24n 0 24.1n 1 29n 1 29.1n 0 50n 0)
-VCPRE cpre 0 PWL(0n 0 10n 0 10.1n 1 14n 1 14.1n 0
-+ 34n 0 34.1n 1 38n 1 38.1n 0 50n 0)
-VCREST crest 0 PWL(0n 0 19n 0 19.1n 1 22n 1 22.1n 0 50n 0)
+VWL wl 0 {wl}
+VCW1 cw1 0 {write1}
+VCW0 cw0 0 {write0}
+VCPRE cpre 0 {precharge}
+VCREST crest 0 {restore}
 .ic V(cell)=0 V(bl)={{VPRE}}
 .control
 set wr_singlescale
 set wr_vecnames
-tran 20p 50n 0 20p uic
+tran 20p {50 * scale:.3f}n 0 20p uic
 wrdata waveform.txt v(cell) v(bl) v(wl)
-meas tran write1_cell FIND v(cell) AT=8n
-meas tran read1_bl FIND v(bl) AT=18n
-meas tran restored_cell FIND v(cell) AT=23n
-meas tran write0_cell FIND v(cell) AT=31n
-meas tran read0_bl FIND v(bl) AT=42n
+meas tran write1_cell FIND v(cell) AT={8 * scale:.3f}n
+meas tran read1_bl FIND v(bl) AT={18 * scale:.3f}n
+meas tran restored_cell FIND v(cell) AT={23 * scale:.3f}n
+meas tran write0_cell FIND v(cell) AT={31 * scale:.3f}n
+meas tran read0_bl FIND v(bl) AT={42 * scale:.3f}n
 quit
 .endc
 .end
@@ -136,26 +184,63 @@ def run_ngspice(netlist: str) -> tuple[pd.DataFrame | None, str, str | None]:
 st.markdown('<div class="eyebrow">PHASE 1 · LESSON 2 · CLOUD NGSPICE</div>', unsafe_allow_html=True)
 st.title("DDR5 Research Lab")
 st.markdown("**Real ngspice circuit simulation, right from your phone.**")
-st.caption("Educational 1T1C DRAM cell, 180 nm NMOS model · Not a production DDR5 PDK")
+st.caption("Educational 1T1C DRAM cell · Adjustable 180 nm-style Level-1 NMOS model · Not a production DDR5 PDK")
 
-with st.sidebar:
-    st.header("Circuit controls")
-    cell_ff = st.slider("Cell capacitance (fF)", 5, 50, 20, 5)
-    bitline_ff = st.slider("Bitline capacitance (fF)", 100, 1000, 300, 50)
-    supply = st.slider("VDD (V)", 0.90, 1.20, 1.10, 0.05)
-    width_um = st.slider("Access NMOS width (µm)", 0.5, 5.0, 1.0, 0.5)
-    st.info("Safety: only a parameterized, built-in netlist runs on the cloud server. External SPICE scripts are not executed.")
+st.markdown("### Circuit parameter editor")
+st.selectbox(
+    "Choose an experiment preset",
+    list(PRESETS),
+    key="preset",
+    on_change=load_preset,
+)
+if st.button("↺ Restore baseline values"):
+    st.session_state["preset"] = "Baseline"
+    load_preset()
+    st.rerun()
 
-vpre = supply / 2
-delta_v = (cell_ff / (cell_ff + bitline_ff)) * supply / 2
-m1, m2, m3 = st.columns(3)
-m1.metric("Ideal read-1 BL", f"{vpre + delta_v:.4f} V")
-m2.metric("Ideal read-0 BL", f"{vpre - delta_v:.4f} V")
-m3.metric("Ideal |ΔV|", f"{delta_v * 1000:.2f} mV")
+with st.expander("1. Storage and bitline", expanded=True):
+    left, right = st.columns(2)
+    with left:
+        st.slider("Storage capacitance Ccell (fF)", 5, 50, 20, 5, key="cell_ff")
+        st.slider("Supply voltage VDD (V)", 0.90, 1.20, 1.10, 0.05, key="supply")
+    with right:
+        st.slider("Bitline capacitance CBL (fF)", 100, 1000, 300, 50, key="bitline_ff")
+        st.slider("Precharge fraction of VDD", 0.30, 0.70, 0.50, 0.05, key="precharge_fraction")
+
+with st.expander("2. NMOS access transistor", expanded=False):
+    left, right = st.columns(2)
+    with left:
+        st.slider("MOSFET width W (µm)", 0.5, 5.0, 1.0, 0.5, key="width_um")
+        st.slider("MOSFET length L (nm)", 100, 500, 180, 10, key="length_nm")
+    with right:
+        st.slider("Threshold voltage VTO (V)", 0.20, 0.70, 0.45, 0.05, key="threshold")
+        st.slider("Model KP (µA/V²)", 50, 500, 200, 25, key="kp_ua")
+
+with st.expander("3. Wordline, drivers and timing", expanded=False):
+    left, right = st.columns(2)
+    with left:
+        st.slider("Active wordline voltage (V)", 1.20, 2.20, 1.80, 0.05, key="wordline_high")
+        st.slider("Driver on-resistance (Ω)", 10, 1000, 50, 10, key="driver_ron")
+    with right:
+        st.slider("Timing scale factor", 0.5, 3.0, 1.0, 0.25, key="time_scale")
+        st.caption("Timing scale multiplies the write, precharge, read and restore event times. Voltage limits are educational and do not guarantee transistor reliability.")
+
+st.info("Cloud safety: only this generated, bounded circuit runs on the server. External SPICE scripts cannot be uploaded for execution.")
+
+params = {name: st.session_state[name] for name in DEFAULTS}
+signature = tuple(params.values())
+vpre = params["supply"] * params["precharge_fraction"]
+ideal_one = (params["cell_ff"] * params["supply"] + params["bitline_ff"] * vpre) / (params["cell_ff"] + params["bitline_ff"])
+ideal_zero = params["bitline_ff"] * vpre / (params["cell_ff"] + params["bitline_ff"])
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Precharge VBL", f"{vpre:.4f} V")
+m2.metric("Ideal read-1", f"{ideal_one:.4f} V", f"+{(ideal_one-vpre)*1000:.2f} mV")
+m3.metric("Ideal read-0", f"{ideal_zero:.4f} V", f"{(ideal_zero-vpre)*1000:.2f} mV")
+m4.metric("Stored-1 charge", f"{params['cell_ff']*params['supply']:.2f} fC")
 
 st.markdown("### Experiment")
 st.write("Write 1 → precharge → read 1 → restore → write 0 → precharge → read 0")
-netlist = build_netlist(cell_ff, bitline_ff, supply, width_um)
+netlist = build_netlist(**params)
 
 with st.expander("View generated SPICE circuit"):
     st.code(netlist, language="text")
@@ -164,10 +249,12 @@ with st.expander("View generated SPICE circuit"):
 if st.button("▶ Run ngspice transient simulation", type="primary", use_container_width=True):
     with st.spinner("Running the circuit on the cloud server..."):
         frame, output, error = run_ngspice(netlist)
-    st.session_state["simulation"] = (frame, output, error)
+    st.session_state["simulation"] = (frame, output, error, signature)
 
 if "simulation" in st.session_state:
-    frame, output, error = st.session_state["simulation"]
+    frame, output, error, last_signature = st.session_state["simulation"]
+    if signature != last_signature:
+        st.warning("Circuit parameters have changed. Press Run again to update the waveforms below.")
     if error:
         st.error(error)
     if frame is not None:
@@ -177,7 +264,8 @@ if "simulation" in st.session_state:
             height=380,
         )
         a, b = st.columns(2)
-        for col, label, time_ns in [(a, "Read 1 at 18 ns", 18), (b, "Read 0 at 42 ns", 42)]:
+        simulated_scale = last_signature[list(DEFAULTS).index("time_scale")]
+        for col, label, time_ns in [(a, "Read 1", 18 * simulated_scale), (b, "Read 0", 42 * simulated_scale)]:
             index = (frame["Time (ns)"] - time_ns).abs().idxmin()
             col.metric(label, f"{frame.loc[index, 'Bitline (V)']:.4f} V")
         st.download_button(
