@@ -1,6 +1,22 @@
 # DDR5 Research Lab — Cloud ngspice on Streamlit
 
-A mobile-friendly Streamlit app that runs **real ngspice transient simulations** of a simplified 1T1C DRAM cell on the cloud server. The browser acts only as a client, so an Android phone or iPhone needs no ngspice installation.
+A mobile-friendly Streamlit app that runs **ngspice transient simulations** of a simplified 1T1C DRAM cell and a cross-coupled CMOS sense amplifier on the cloud server. The browser acts only as a client, so an Android phone or iPhone needs no ngspice installation.
+
+## Phase 1 · Lesson 3: CMOS sense amplifier
+
+Open **Lesson 3 · CMOS Sense Amplifier** from the app's page navigation. This new experiment includes:
+
+- Two independent read tests running simultaneously: a cell initially storing **1** and one storing **0**.
+- A complementary bitline reference precharged to **VDD/2**, alongside each storage bitline.
+- A transistor-level **four-MOSFET cross-coupled latch** for each branch, with editable NMOS width, PMOS width and sense-enable timing.
+- Adjustable cell and bitline capacitance, supply voltage, access-transistor width and wordline voltage.
+- Three waveform views: differential bitlines, storage cell restoration, and wordline/sense-enable rails.
+- Automated checks for precharge accuracy, correct charge-sharing polarity, full-rail regeneration and read restoration.
+- Downloads for both the generated `.cir` netlist and measured waveform CSV.
+
+The baseline ideal pre-sense charge-sharing voltages for Ccell = 20 fF, CBL = 300 fF and VDD = 1.1 V are **0.584375 V** for read-1 and **0.515625 V** for read-0, against a 0.55 V reference (±34.375 mV). These are analytical values, not evidence of a completed ngspice run; actual waveforms and pass/fail decisions come from the cloud simulation.
+
+The experimental models are educational 180 nm-style Level-1 devices rather than an official DDR5 design kit. Passing the tests does not establish yield, retention, timing compliance, or manufacturability.
 
 ## Adjustable variables
 
@@ -28,10 +44,10 @@ The algorithms initially rank candidates using a simplified analytical **surroga
 
 The search score is a relative engineering tradeoff, **not** proof of a globally perfect design or a manufacturing-ready DDR5 cell. Energy, delay, and area values are first-order proxies; high-fidelity device characterization, timing constraints, extracted parasitics, retention and signal integrity are future milestones.
 
-Run the offline optimizer tests with:
+Run the offline tests with:
 
 ```bash
-python -m unittest test_optimizer.py
+python -m unittest test_optimizer.py test_sense_amplifier.py
 ```
 
 ## Files
@@ -39,12 +55,15 @@ python -m unittest test_optimizer.py
 - `streamlit_app.py` — interface, parameterized SPICE netlist and simulation runner
 - `optimizer.py` — bounded multi-algorithm design search and tradeoff score
 - `test_optimizer.py` — regression tests for search and surrogate behavior
+- `sense_amplifier.py` — Lesson 3 SPICE generator, isolated cloud runner and waveform checks
+- `pages/2_Sense_Amplifier.py` — mobile-friendly Step 3 experiment page
+- `test_sense_amplifier.py` — verification, charge-sharing and circuit-structure tests
 - `requirements.txt` — Python packages
 - `packages.txt` — Linux package for Streamlit Community Cloud (`ngspice`)
 
 ## Deploy to Streamlit Community Cloud
 
-1. Create a GitHub repository and upload these three files to its root.
+1. Use the repository `muneebaq/ddr5-ngspice-streamlit` containing these files (including the `pages/` folder).
 2. Open https://share.streamlit.io and sign in, connecting the GitHub account.
 3. Click **Create app** and choose the repository, branch `main`, and entrypoint `streamlit_app.py`.
 4. Deploy. Community Cloud installs the Python requirements and the system `ngspice` package.
