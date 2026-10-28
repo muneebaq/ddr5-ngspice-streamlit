@@ -13,6 +13,7 @@ import tempfile
 
 import pandas as pd
 import streamlit as st
+from optimizer import OBJECTIVES, optimize_all
 
 
 st.set_page_config(page_title="DDR5 Research Lab", page_icon="🧪", layout="wide")
@@ -151,7 +152,7 @@ def read_waveform(path: Path) -> pd.DataFrame:
     return selected
 
 
-def run_ngspice(netlist: str) -> tuple[pd.DataFrame | None, str, str | None]:
+def run_ngspice(netlist: str, timeout_seconds: int = 35) -> tuple[pd.DataFrame | None, str, str | None]:
     executable = shutil.which("ngspice")
     if not executable:
         return None, "", "ngspice is not installed on this server. Add 'ngspice' to packages.txt and redeploy."
@@ -166,11 +167,11 @@ def run_ngspice(netlist: str) -> tuple[pd.DataFrame | None, str, str | None]:
                 cwd=folder,
                 capture_output=True,
                 text=True,
-                timeout=35,
+                timeout=timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return None, "", "ngspice exceeded the 35-second simulation limit."
+            return None, "", f"ngspice exceeded the {timeout_seconds}-second simulation limit."
         except OSError as exc:
             return None, "", f"ngspice could not start: {exc}"
 
@@ -184,6 +185,26 @@ def run_ngspice(netlist: str) -> tuple[pd.DataFrame | None, str, str | None]:
             return read_waveform(waveform_path), logs, None
         except (OSError, ValueError, pd.errors.ParserError) as exc:
             return None, logs, f"Waveform parsing failed: {exc}"
+
+
+def apply_optimized_design() -> None:
+    """Update widget state safely from a Streamlit button callback."""
+    chosen = st.session_state["chosen_optimization"]["parameters"]
+    for key, value in chosen.items():
+        if key in DEFAULTS:
+            st.session_state[key] = value
+    st.session_state["preset"] = "Baseline"
+
+
+def measured_margin(frame: pd.DataFrame, parameters: dict) -> float:
+    """Minimum observed read-1/read-0 bitline deviation in millivolts."""
+    scale = parameters["time_scale"]
+    pre = parameters["supply"] * parameters["precharge_fraction"]
+    read_one_index = (frame["Time (ns)"] - 18 * scale).abs().idxmin()
+    read_zero_index = (frame["Time (ns)"] - 42 * scale).abs().idxmin()
+    one = float(frame.loc[read_one_index, "Bitline (V)"])
+    zero = float(frame.loc[read_zero_index, "Bitline (V)"])
+    return 1000 * min(one - pre, pre - zero)
 
 
 st.markdown('<div class="eyebrow">PHASE 1 · LESSON 2 · CLOUD NGSPICE</div>', unsafe_allow_html=True)
@@ -279,6 +300,109 @@ if "simulation" in st.session_state:
         )
     with st.expander("ngspice console and diagnostics", expanded=bool(error)):
         st.code(output or "No console output was received.", language="text")
+
+st.divider()
+st.markdown("### Automatic circuit optimization")
+st.write("Compare three search algorithms and select the strongest design for **your chosen tradeoff**. No single design maximizes speed, sensing margin, and energy efficiency simultaneously.")
+
+with st.expander("Optimization objective and constraints", expanded=True):
+    objective = st.selectbox("Optimization goal", list(OBJECTIVES))
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        min_margin_mv = st.slider("Minimum sensing margin (mV)", 5, 80, 20, 5)
+    with c2:
+        max_energy_fj = st.slider("Maximum energy proxy (fJ)", 50, 500, 250, 25)
+    with c3:
+        max_delay_ns = st.slider("Maximum RC-delay proxy (ns)", 0.1, 3.0, 1.0, 0.1)
+    budget = st.slider("Candidate evaluations per algorithm", 24, 240, 96, 24)
+    seed = st.number_input("Random seed (repeatable results)", min_value=0, max_value=100000, value=7)
+    validate = st.checkbox("Validate the three finalists using ngspice", value=True)
+    st.caption("Search variables: Ccell, CBL, VDD, precharge fraction, NMOS width, wordline voltage, and driver resistance. Process parameters and timing scale remain fixed at your selected values.")
+
+limits = {
+    "min_margin_mv": float(min_margin_mv),
+    "max_energy_fj": float(max_energy_fj),
+    "max_delay_ns": float(max_delay_ns),
+}
+opt_signature = (signature, objective, tuple(limits.values()), budget, int(seed), validate)
+
+if st.button("⚡ Compare optimization algorithms", type="primary", use_container_width=True):
+    with st.spinner("Searching the parameter space..."):
+        winners = optimize_all(params, objective, limits, budget, int(seed))
+
+    if validate:
+        progress = st.progress(0, text="Checking finalists with ngspice...")
+        for i, candidate in enumerate(winners):
+            frame, log, error = run_ngspice(build_netlist(**candidate["parameters"]), timeout_seconds=12)
+            candidate["ngspice_error"] = error
+            candidate["ngspice_log"] = log
+            if frame is not None:
+                candidate["spice_margin_mv"] = measured_margin(frame, candidate["parameters"])
+            progress.progress((i + 1) / len(winners), text=f"Checked {i + 1} of {len(winners)} finalists")
+        progress.empty()
+
+    validated = [
+        item for item in winners
+        if item.get("spice_margin_mv") is not None
+        and item["spice_margin_mv"] >= min_margin_mv
+        and item["feasible"]
+    ]
+    recommended = max(validated, key=lambda item: item["rank"]) if validated else winners[0]
+    st.session_state["optimization_result"] = (winners, recommended, opt_signature, validate)
+    st.session_state["chosen_optimization"] = recommended
+
+if "optimization_result" in st.session_state:
+    winners, recommended, prior_signature, validation_requested = st.session_state["optimization_result"]
+    if opt_signature != prior_signature:
+        st.warning("Optimization inputs have changed. Run the algorithms again to refresh the results.")
+
+    st.markdown("#### Algorithm comparison")
+    records = []
+    for item in winners:
+        m = item["metrics"]
+        records.append({
+            "Algorithm": item["algorithm"],
+            "Constraints": "Pass" if item["feasible"] else "Not met",
+            "Objective score": round(item["score"], 3),
+            "Margin estimate (mV)": round(m["margin_mv"], 2),
+            "Energy proxy (fJ)": round(m["energy_fj"], 1),
+            "RC-delay proxy (ns)": round(m["delay_ns"], 3),
+            "ngspice margin (mV)": round(item["spice_margin_mv"], 2) if "spice_margin_mv" in item else None,
+        })
+    st.dataframe(pd.DataFrame(records), hide_index=True, use_container_width=True)
+
+    if not any(item["feasible"] for item in winners):
+        st.warning("No search finalist met every surrogate constraint. The recommended candidate has the lowest-ranked constraint violations, not a fully feasible design. Consider relaxing the limits.")
+    elif validation_requested and not any("spice_margin_mv" in item for item in winners):
+        st.warning("None of the finalists could be validated by ngspice. Rankings remain surrogate-only; check the ngspice diagnostic messages below.")
+    elif validation_requested and recommended.get("spice_margin_mv") is None:
+        st.warning("The recommended candidate has not passed ngspice validation. It is only the best surrogate estimate.")
+    elif validation_requested and recommended["spice_margin_mv"] < min_margin_mv:
+        st.warning("The recommended design did not achieve the requested read margin in ngspice; it is not validated against that constraint.")
+    else:
+        st.success("The leading design is selected for the current objective and constraints.")
+
+    st.markdown(f"#### Recommended candidate — {recommended['algorithm']}")
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Estimated read margin", f"{recommended['metrics']['margin_mv']:.2f} mV")
+    r2.metric("Energy proxy", f"{recommended['metrics']['energy_fj']:.1f} fJ")
+    r3.metric("RC-delay proxy", f"{recommended['metrics']['delay_ns']:.3f} ns")
+    st.dataframe(
+        pd.DataFrame([{"Parameter": key, "Optimized value": value} for key, value in recommended["parameters"].items()]),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.button("Apply these values to the circuit controls", on_click=apply_optimized_design, use_container_width=True)
+    with st.expander("ngspice validation details"):
+        for item in winners:
+            status = "pass" if "spice_margin_mv" in item and item["spice_margin_mv"] >= min_margin_mv else "unverified / below threshold"
+            st.write(f"**{item['algorithm']}** — {status}")
+            if item.get("ngspice_error"):
+                st.error(item["ngspice_error"])
+            if item.get("ngspice_log"):
+                st.code(item["ngspice_log"][-5000:], language="text")
+
+st.caption("Optimization uses a simplified charge-sharing, switching-energy, and RC-delay surrogate. Score units are relative, not a measured DDR5 performance metric. ngspice validates the read-margin of finalists; physical area, energy, reliability, and JEDEC compliance still require separate analysis.")
 
 st.divider()
 st.markdown("### What are we learning?")
