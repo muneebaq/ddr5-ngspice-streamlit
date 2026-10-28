@@ -68,6 +68,8 @@ def evaluate(parameters: dict, objective: str, limits: dict) -> dict:
         max(0.0, (limits["min_margin_mv"] - margin_mv) / max(limits["min_margin_mv"], 1))
         + max(0.0, (energy_fj - limits["max_energy_fj"]) / limits["max_energy_fj"])
         + max(0.0, (delay_ns - limits["max_delay_ns"]) / limits["max_delay_ns"])
+        + max(0.0, (vdd - limits.get("max_vdd", 1.2)) / limits.get("max_vdd", 1.2))
+        + max(0.0, (parameters["wordline_high"] - limits.get("max_wordline_high", 2.2)) / limits.get("max_wordline_high", 2.2))
     )
     weights = OBJECTIVES[objective]
     score = (
