@@ -18,7 +18,8 @@ BASE = {
     "driver_ron": 50,
     "time_scale": 1.0,
 }
-LIMITS = {"min_margin_mv": 20.0, "max_energy_fj": 250.0, "max_delay_ns": 1.0}
+LIMITS = {"min_margin_mv": 20.0, "max_energy_fj": 250.0, "max_delay_ns": 1.0,
+          "max_vdd": 1.10, "max_wordline_high": 1.80}
 
 
 class OptimizerTests(unittest.TestCase):
@@ -36,6 +37,12 @@ class OptimizerTests(unittest.TestCase):
         good = evaluate(BASE, "Balanced", LIMITS)
         weak = evaluate({**BASE, "wordline_high": 1.2}, "Balanced", LIMITS)
         self.assertLess(weak["metrics"]["margin_mv"], good["metrics"]["margin_mv"])
+
+    def test_voltage_limits_are_constraints(self):
+        high_vdd = evaluate({**BASE, "supply": 1.2}, "Balanced", LIMITS)
+        high_wl = evaluate({**BASE, "wordline_high": 2.2}, "Balanced", LIMITS)
+        self.assertFalse(high_vdd["feasible"])
+        self.assertFalse(high_wl["feasible"])
 
     def test_snap_stays_bounded(self):
         for key, (low, high, _) in SEARCH_BOUNDS.items():
